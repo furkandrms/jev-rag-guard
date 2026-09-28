@@ -277,3 +277,11 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
         if not match:
             raise ValueError(f"No JSON object found in model response: {text!r}")
         return json.loads(match.group(0))
+
+
+# No JevDecisionModel here: `typesafe-sdk-python` does not exist on PyPI as
+# of this writing (verified: `pip index versions typesafe-sdk-python` and a
+# direct PyPI JSON API query both 404). A client can't be implemented against
+# an API that isn't installable or verifiable, so this is skipped rather than
+# fabricated -- see the README's "decision model is pluggable" section for
+# the interface a real one would need to implement.
