@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-guard"
+version = "0.1.0"
+description = "A typed-decision accuracy layer for RAG pipelines: relevance filtering, a pre-generation sufficiency gate, and post-generation grounding checks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.30"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+include = ["rag_guard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
