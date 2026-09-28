@@ -19,10 +19,11 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
-        # Live decision-model tests (test_openai_live_*, test_anthropic_live_*)
-        # are skipped automatically since OPENAI_API_KEY / ANTHROPIC_API_KEY
-        # are not set here -- wiring those up as CI secrets is a decision for
-        # the repo owner to make explicitly, not something CI should assume.
+        # Live decision-model tests (test_openai_live_*, test_anthropic_live_*,
+        # test_jev_live_*) are skipped automatically since OPENAI_API_KEY /
+        # ANTHROPIC_API_KEY / TYPESAFE_API_KEY are not set here -- wiring
+        # those up as CI secrets is a decision for the repo owner to make
+        # explicitly, not something CI should assume.
         run: pytest -q
 
   lint:

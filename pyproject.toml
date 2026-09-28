@@ -14,8 +14,9 @@ dependencies = []
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
+typesafe = ["typesafe-sdk>=0.7"]
 examples = ["chromadb>=0.5"]
-dev = ["pytest>=7.0", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=7.0", "ruff>=0.6", "mypy>=1.10", "typesafe-sdk>=0.7"]
 
 [tool.setuptools.packages.find]
 include = ["rag_guard*"]
@@ -37,5 +38,5 @@ strict = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["openai.*", "anthropic.*", "chromadb.*"]
+module = ["openai.*", "anthropic.*", "chromadb.*", "typesafe_sdk.*"]
 ignore_missing_imports = true

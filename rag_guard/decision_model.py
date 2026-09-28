@@ -285,9 +285,57 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
         return result
 
 
-# No JevDecisionModel here: `typesafe-sdk-python` does not exist on PyPI as
-# of this writing (verified: `pip index versions typesafe-sdk-python` and a
-# direct PyPI JSON API query both 404). A client can't be implemented against
-# an API that isn't installable or verifiable, so this is skipped rather than
-# fabricated -- see the README's "decision model is pluggable" section for
-# the interface a real one would need to implement.
+class JevDecisionModel(DecisionModel):
+    """Decision model backed by TypeSafe's Jev -- a native typed-decision model.
+
+    Unlike `OpenAIDecisionModel` / `AnthropicDecisionModel` (LLM calls shaped
+    to look like typed decisions by prompting for JSON and parsing the
+    result), this talks to Jev's System One API directly: Noul and Choice
+    are first-class request/response primitives on the wire, not something
+    recovered from free-form text. No prompt-building or JSON-parsing layer
+    is needed here -- `rag_guard`'s own `state`/`question`/`options` map
+    directly onto the SDK's `Noul`/`Choice` questions.
+
+    Requires the `typesafe-sdk` package (`pip install typesafe-sdk`) and a
+    `TYPESAFE_API_KEY` (see https://console.typesafe.ai/). Note this is a
+    different env var name than the `JEV_API_KEY` naming used elsewhere --
+    that's the SDK's own convention, not one rag-guard invented.
+    """
+
+    def __init__(self, model: str | None = None, client: Any | None = None) -> None:
+        self.model = model
+        self._client: Any
+        if client is not None:
+            self._client = client
+        else:
+            try:
+                from typesafe_sdk import TypeSafeClient
+            except ImportError as exc:  # pragma: no cover - import guard
+                raise ImportError(
+                    "JevDecisionModel requires the 'typesafe-sdk' package: "
+                    "pip install typesafe-sdk"
+                ) from exc
+            self._client = TypeSafeClient()
+
+    def noul(self, state: str, question: str) -> float:
+        from typesafe_sdk import Noul
+
+        response = self._client.system_one(
+            state=state,
+            questions={"result": Noul(instructions=question)},
+            model=self.model,
+        )
+        return float(response.answers["result"].noul)
+
+    def choice(
+        self, state: str, question: str, options: Mapping[str, str]
+    ) -> tuple[str, dict[str, float]]:
+        from typesafe_sdk import Choice
+
+        response = self._client.system_one(
+            state=state,
+            questions={"result": Choice(instructions=question, criteria=dict(options))},
+            model=self.model,
+        )
+        answer = response.answers["result"]
+        return answer.choice, dict(answer.probabilities)

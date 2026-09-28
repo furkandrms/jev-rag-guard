@@ -32,9 +32,10 @@ prose you have to parse.
 
 ```bash
 pip install -e .
-# optional, if you want an LLM-backed decision model instead of the built-in heuristic:
+# optional, if you want a real decision model instead of the built-in heuristic:
 pip install -e ".[openai]"
 pip install -e ".[anthropic]"
+pip install -e ".[typesafe]"   # native typed-decision model, see "decision model is pluggable" below
 ```
 
 ## Quickstart
@@ -86,7 +87,7 @@ review) is a decision left to your application.
 
 `DecisionModel` is the one interface everything in this library is built
 on: `noul(state, question) -> float` and `choice(state, question, options)
--> (key, distribution)`. Three implementations ship with the library:
+-> (key, distribution)`. Four implementations ship with the library:
 
 - **`HeuristicDecisionModel`** (default, zero dependencies): deterministic
   lexical-overlap scoring. Good for tests, demos, and wiring up your
@@ -97,11 +98,15 @@ on: `noul(state, question) -> float` and `choice(state, question, options)
   available APIs, but they're a compatibility adapter, not a native typed
   decision model -- you're paying LLM-call latency and cost for what should
   be a fast, cheap judgment.
-- **A real typed-decision model** (e.g. TypeSafe's Jev, if you have API
-  access): implement `DecisionModel` around `typesafe-sdk-python` and every
-  check in this library gets both faster and cheaper for free, since that's
-  exactly the shape typed decision models are built for. See
-  `rag_guard/decision_model.py` for the interface to implement.
+- **`JevDecisionModel`**: a native typed-decision model, backed by
+  TypeSafe's Jev. Noul/Choice are first-class request/response primitives
+  on the wire (no prompt-building or JSON-parsing layer, unlike the OpenAI
+  / Anthropic adapters), so checks get both faster and cheaper. Requires
+  `pip install rag-guard[typesafe]` and a `TYPESAFE_API_KEY` (see
+  https://console.typesafe.ai/).
+
+See `rag_guard/decision_model.py` for the `DecisionModel` interface if you
+want to implement your own backend.
 
 Swapping backends never touches `relevance.py`, `sufficiency.py`,
 `grounding.py`, or `pipeline.py` -- they only ever call `model.noul(...)`.

@@ -8,6 +8,7 @@ import pytest
 from rag_guard.decision_model import (
     AnthropicDecisionModel,
     HeuristicDecisionModel,
+    JevDecisionModel,
     OpenAIDecisionModel,
 )
 
@@ -193,6 +194,74 @@ def test_openai_live_noul_easy_case():
 )
 def test_anthropic_live_noul_easy_case():
     model = AnthropicDecisionModel()
+    state = (
+        "Question: What is the capital of France?\n\n"
+        "Passage:\nParis is the capital and most populous city of France."
+    )
+    prob = model.noul(
+        state, "Does this passage contain information that helps answer the question?"
+    )
+    assert prob > 0.5
+
+
+# --- JevDecisionModel: mocked client, no network access ---------------------
+#
+# Unlike the OpenAI/Anthropic adapters, Jev's System One API returns typed
+# Noul/Choice answers directly -- there's no prompt string or JSON blob to
+# inspect, so these tests assert on the request rag_guard builds (state,
+# questions passed to system_one) and the typed response it reads back.
+
+
+def _jev_client_returning(**answers: SimpleNamespace) -> MagicMock:
+    client = MagicMock()
+    client.system_one.return_value = SimpleNamespace(answers=answers)
+    return client
+
+
+def test_jev_noul_builds_question_and_reads_probability():
+    client = _jev_client_returning(result=SimpleNamespace(type="noul", noul=0.87))
+    model = JevDecisionModel(client=client)
+
+    prob = model.noul("Question: X?\n\nPassage:\nY.", "Does this help?")
+
+    assert prob == 0.87
+    kwargs = client.system_one.call_args.kwargs
+    assert kwargs["state"] == "Question: X?\n\nPassage:\nY."
+    assert kwargs["questions"]["result"].instructions == "Does this help?"
+
+
+def test_jev_choice_passes_options_as_criteria_and_reads_distribution():
+    client = _jev_client_returning(
+        result=SimpleNamespace(
+            choice="b", probabilities={"a": 0.2, "b": 0.8}, confidence=0.6
+        )
+    )
+    model = JevDecisionModel(client=client)
+
+    chosen, distribution = model.choice(
+        "state", "Which team?", {"a": "Option A", "b": "Option B"}
+    )
+
+    assert chosen == "b"
+    assert distribution == {"a": 0.2, "b": 0.8}
+    kwargs = client.system_one.call_args.kwargs
+    assert kwargs["questions"]["result"].criteria == {"a": "Option A", "b": "Option B"}
+
+
+def test_jev_model_override_is_passed_through():
+    client = _jev_client_returning(result=SimpleNamespace(type="noul", noul=0.5))
+    model = JevDecisionModel(model="jev-1.13.0", client=client)
+
+    model.noul("state", "question")
+
+    assert client.system_one.call_args.kwargs["model"] == "jev-1.13.0"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("TYPESAFE_API_KEY"), reason="requires TYPESAFE_API_KEY"
+)
+def test_jev_live_noul_easy_case():
+    model = JevDecisionModel()
     state = (
         "Question: What is the capital of France?\n\n"
         "Passage:\nParis is the capital and most populous city of France."
