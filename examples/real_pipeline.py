@@ -137,7 +137,8 @@ def _make_generate_fn() -> tuple[str, GenerateFn, DecisionModel]:
             response = client.messages.create(
                 model="claude-haiku-4-5",
                 max_tokens=300,
-                temperature=0,
+                # No `temperature`: the current Anthropic API rejects it on
+                # messages.create (see decision_model.py's AnthropicDecisionModel).
                 messages=[
                     {
                         "role": "user",

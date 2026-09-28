@@ -129,7 +129,7 @@ def test_anthropic_noul_builds_prompt_and_parses_probability():
     kwargs = client.messages.create.call_args.kwargs
     assert kwargs["model"] == "claude-haiku-4-5"
     assert kwargs["max_tokens"] == 256
-    assert kwargs["temperature"] == 0
+    assert "temperature" not in kwargs  # unsupported by the current Anthropic API
     prompt = kwargs["messages"][0]["content"]
     assert "Question: X?" in prompt
     assert "Respond with JSON only." in prompt

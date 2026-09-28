@@ -267,10 +267,14 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
             self._client = anthropic.Anthropic()
 
     def _complete_json(self, prompt: str) -> dict[str, Any]:
+        # No `temperature` here: the current Anthropic API doesn't accept it
+        # on `messages.create` (verified live -- passing it raises a
+        # TypeError from the SDK). Determinism for this typed-decision use
+        # case comes from the tight JSON-only instructions, not sampling
+        # temperature.
         response = self._client.messages.create(
             model=self.model,
             max_tokens=256,
-            temperature=0,
             messages=[{"role": "user", "content": prompt + "\n\nRespond with JSON only."}],
         )
         text = "".join(
