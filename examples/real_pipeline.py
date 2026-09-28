@@ -7,9 +7,14 @@ Unlike `quickstart.py` (a hardcoded chunk list + a string-template
     below) over the ~30-document corpus in `corpus.py`
   - a real LLM for `generate_fn`, via whichever of OPENAI_API_KEY /
     ANTHROPIC_API_KEY is set
+  - a real decision model for rag-guard's own relevance/sufficiency/
+    grounding checks: `JevDecisionModel` if TYPESAFE_API_KEY is set
+    (native typed decisions -- no generation capability, so it's never
+    used for `generate_fn`), otherwise whichever LLM is generating
 
 and prints the same `GuardReport` trace `quickstart.py` does, so you can
-compare the heuristic demo against a real pipeline side by side.
+compare the heuristic demo against a real pipeline side by side, or
+compare decision-model backends against each other on the same queries.
 
 ## Why chromadb (not faiss-cpu)
 
@@ -26,8 +31,10 @@ vector DB) is just as good a fit for rag-guard -- it only ever sees the
 
 ## Setup
 
-    pip install -e ".[openai]" chromadb   # or ".[anthropic]"
+    pip install -e ".[openai]" chromadb   # or ".[anthropic]", ".[typesafe]"
     export OPENAI_API_KEY=...             # or ANTHROPIC_API_KEY
+    export TYPESAFE_API_KEY=...           # optional: routes decision-model
+                                           # checks through Jev instead
     python examples/real_pipeline.py
 
 ## Expected cost
@@ -38,8 +45,10 @@ per candidate chunk for relevance, one for sufficiency, and one per
 generated sentence for grounding -- with the default chunk count and short
 answers here, that's on the order of 10-20 small completions per query).
 Using `gpt-4o-mini` or `claude-haiku-4-5` (the defaults), the whole run
-costs well under $0.01. Using a larger model for `DECISION_MODEL_NAME` /
-`GENERATE_MODEL_NAME` will cost more.
+costs well under $0.01. Using a larger model for generation will cost more.
+Jev's Noul/Choice calls are typed decisions, not chat completions -- they
+are not priced or billed the same way as the LLM calls above; check your
+TypeSafe plan for its own cost basis.
 """
 
 from __future__ import annotations
@@ -49,7 +58,12 @@ import os
 from corpus import DOCUMENTS
 
 from rag_guard import Chunk, RagGuard
-from rag_guard.decision_model import AnthropicDecisionModel, DecisionModel, OpenAIDecisionModel
+from rag_guard.decision_model import (
+    AnthropicDecisionModel,
+    DecisionModel,
+    JevDecisionModel,
+    OpenAIDecisionModel,
+)
 from rag_guard.pipeline import GenerateFn
 
 COLLECTION_NAME = "rag_guard_real_pipeline_example"
@@ -80,12 +94,18 @@ def _make_retriever(collection):
     return retrieve
 
 
-def _pick_backend() -> tuple[DecisionModel, GenerateFn]:
+def _make_generate_fn() -> tuple[str, GenerateFn, DecisionModel]:
+    """Pick the LLM that generates answers, and the decision model it also backs by default.
+
+    Returns (backend_name, generate_fn, fallback_decision_model) -- the
+    fallback is used for rag-guard's own checks only if TYPESAFE_API_KEY
+    isn't set (see `_make_decision_model`), since Jev has no generation
+    capability of its own and can never be the answer to "what generates?".
+    """
     if os.environ.get("OPENAI_API_KEY"):
         from openai import OpenAI
 
         client = OpenAI()
-        model = OpenAIDecisionModel(client=client)
 
         def generate(query: str, chunks: list[Chunk]) -> str:
             context = "\n\n".join(f"[{c.id}] {c.text}" for c in chunks)
@@ -105,13 +125,12 @@ def _pick_backend() -> tuple[DecisionModel, GenerateFn]:
             )
             return response.choices[0].message.content
 
-        return model, generate
+        return "openai", generate, OpenAIDecisionModel(client=client)
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         import anthropic
 
         client = anthropic.Anthropic()
-        model = AnthropicDecisionModel(client=client)
 
         def generate(query: str, chunks: list[Chunk]) -> str:
             context = "\n\n".join(f"[{c.id}] {c.text}" for c in chunks)
@@ -134,18 +153,35 @@ def _pick_backend() -> tuple[DecisionModel, GenerateFn]:
                 block.text for block in response.content if getattr(block, "type", None) == "text"
             )
 
-        return model, generate
+        return "anthropic", generate, AnthropicDecisionModel(client=client)
 
     raise SystemExit(
-        "real_pipeline.py needs a real LLM: set OPENAI_API_KEY or ANTHROPIC_API_KEY.\n"
-        "See the module docstring for setup and expected cost."
+        "real_pipeline.py needs a real LLM to generate answers: set OPENAI_API_KEY "
+        "or ANTHROPIC_API_KEY. See the module docstring for setup and expected cost."
     )
 
 
+def _make_decision_model(fallback: DecisionModel) -> tuple[str, DecisionModel]:
+    """Pick the backend for rag-guard's own relevance/sufficiency/grounding checks.
+
+    Prefers Jev (native typed decisions -- see README's "decision model is
+    pluggable" section) when TYPESAFE_API_KEY is set; otherwise reuses
+    whichever LLM is already generating answers, so no second API key is
+    required just to run this example.
+    """
+    if os.environ.get("TYPESAFE_API_KEY"):
+        return "jev", JevDecisionModel()
+    return "same as generate_fn", fallback
+
+
 def main() -> None:
-    model, generate_fn = _pick_backend()
+    generate_backend, generate_fn, fallback_model = _make_generate_fn()
+    decision_backend, model = _make_decision_model(fallback_model)
     collection = _build_vector_store()
     retrieve = _make_retriever(collection)
+
+    print(f"generate_fn backend: {generate_backend}")
+    print(f"decision model backend: {decision_backend}")
 
     guard = RagGuard(model=model)
 
