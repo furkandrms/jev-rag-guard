@@ -4,6 +4,21 @@ A typed-decision accuracy layer for RAG pipelines. It doesn't retrieve and
 it doesn't generate -- it wraps the seam between the two with three small,
 cheap, typed checks, and gives you a full trace of what it decided and why.
 
+[![CI](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml)
+
+## Table of contents
+
+- [Why](#why)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
+- [The decision model is pluggable](#the-decision-model-is-pluggable)
+- [Tuning](#tuning)
+- [What this deliberately doesn't do](#what-this-deliberately-doesnt-do)
+- [Project layout](#project-layout)
+- [Development](#development)
+- [About the SKILL.md file](#about-the-skillmd-file)
+
 ## Why
 
 Vector search finds passages that are embedding-close to a query. That is
@@ -38,6 +53,9 @@ pip install -e ".[anthropic]"
 pip install -e ".[typesafe]"   # native typed-decision model, see "decision model is pluggable" below
 ```
 
+The core `rag_guard` package has **zero required dependencies**. Every
+backend beyond the built-in heuristic is an opt-in extra.
+
 ## Quickstart
 
 ```python
@@ -66,14 +84,17 @@ For a version wired to a real vector store (chromadb) and a real LLM
 ```bash
 pip install -e ".[examples,openai]"   # or ".[examples,anthropic]"
 export OPENAI_API_KEY=...             # or ANTHROPIC_API_KEY
+export TYPESAFE_API_KEY=...           # optional: route decision-model checks through Jev
 python examples/real_pipeline.py
 ```
 
 It runs 4 queries end to end against a ~30-document corpus and prints the
 same `GuardReport` trace as `quickstart.py`, so you can compare the
-heuristic demo against a real pipeline side by side. The whole run costs
-well under $0.01 with the default models (`gpt-4o-mini` /
-`claude-haiku-4-5`) -- see the module docstring for the cost breakdown.
+heuristic demo against a real pipeline side by side, or compare
+decision-model backends against each other on the same queries. The whole
+run costs well under $0.01 with the default models (`gpt-4o-mini` /
+`claude-haiku-4-5`) -- see the module docstring for the full cost
+breakdown.
 
 `report` is a `GuardReport` with the full trace: `report.relevance` (per-chunk
 probabilities and keep/drop decisions), `report.sufficiency`,
@@ -82,6 +103,45 @@ Nothing is hidden from you -- rag-guard flags problems, it doesn't silently
 swallow them. What to do with an `ungrounded_answer_flagged` result (show it
 with a warning, retry generation, escalate to a stronger model, log it for
 review) is a decision left to your application.
+
+## How it works
+
+`RagGuard.run(query, chunks, generate_fn)` walks through the three stages
+in order, short-circuiting as soon as a stage says there's no point going
+further:
+
+```
+retrieved chunks
+      │
+      ▼
+┌─────────────┐   drop chunks below relevance_threshold
+│  Relevance  │   (per-chunk Noul call: "does this help answer the query?")
+└─────────────┘
+      │ kept chunks
+      ▼
+┌─────────────┐   below sufficiency_threshold?
+│ Sufficiency │──────────────────────────► return "I don't know" + trace
+└─────────────┘   (generate_fn is never called -- no wasted generation cost)
+      │ sufficient
+      ▼
+┌─────────────┐
+│ generate_fn │   your existing LLM call -- called exactly once
+└─────────────┘
+      │ answer
+      ▼
+┌─────────────┐   split into claims, check each against kept chunks
+│  Grounding  │   below grounding_min_coverage? action = "ungrounded_answer_flagged"
+└─────────────┘   (answer is still returned -- rag-guard flags, never hides)
+      │
+      ▼
+  GuardReport(action, answer, relevance, sufficiency, grounding)
+```
+
+Every stage calls `model.noul(state, question)` (or `.choice(...)`) on
+whatever `DecisionModel` you passed to `RagGuard(model=...)` -- see the next
+section. `relevance.py`, `sufficiency.py`, and `grounding.py` never call an
+LLM API directly; they only ever go through that one interface, which is
+what makes backends swappable without touching the pipeline logic.
 
 ## The decision model is pluggable
 
@@ -97,7 +157,7 @@ on: `noul(state, question) -> float` and `choice(state, question, options)
   for a structured yes/no + probability. These work today with widely
   available APIs, but they're a compatibility adapter, not a native typed
   decision model -- you're paying LLM-call latency and cost for what should
-  be a fast, cheap judgment.
+  be a fast, cheap judgment. Requires `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`.
 - **`JevDecisionModel`**: a native typed-decision model, backed by
   TypeSafe's Jev. Noul/Choice are first-class request/response primitives
   on the wire (no prompt-building or JSON-parsing layer, unlike the OpenAI
@@ -110,6 +170,20 @@ want to implement your own backend.
 
 Swapping backends never touches `relevance.py`, `sufficiency.py`,
 `grounding.py`, or `pipeline.py` -- they only ever call `model.noul(...)`.
+You can also mix backends: use Jev (or an LLM) for rag-guard's own checks
+while a different LLM handles generation, since `generate_fn` and the
+`DecisionModel` are independent constructor arguments -- see how
+`examples/real_pipeline.py` picks each one separately.
+
+### Comparing backends
+
+All four backends were run against the same corpus and queries in
+`examples/real_pipeline.py` during development. On simple factual queries,
+`OpenAIDecisionModel`, `AnthropicDecisionModel`, and `JevDecisionModel` all
+produced the same relevance/sufficiency/grounding verdicts, with decisive
+probabilities (rarely landing near the 0.5 boundary). `HeuristicDecisionModel`
+is not in that comparison on purpose -- it's a lexical stand-in, not a
+judgment you should compare for accuracy.
 
 ## Tuning
 
@@ -145,28 +219,64 @@ that applies to any typed-decision system applies here too.
   `split_claims` is a naive sentence splitter. If your answers are long or
   multi-clause, swap in a proper claim-decomposition step (an LLM call that
   extracts atomic claims) before grounding-checking each one.
+- **No framework adapters (yet).** There's no built-in LangChain `Runnable`
+  or LlamaIndex query-engine wrapper. `RagGuard.run()` only needs a list of
+  `Chunk` objects and a `generate_fn(query, chunks) -> str`, so wrapping
+  either framework's retriever/generator is a small amount of glue code on
+  the calling side today.
 
 ## Project layout
 
 ```
 rag_guard/
-  decision_model.py   # the DecisionModel interface + Heuristic/OpenAI/Anthropic implementations
-  relevance.py         # stage 1: per-chunk relevance filter
-  sufficiency.py        # stage 2: pre-generation sufficiency gate
-  grounding.py           # stage 3: post-generation claim-by-claim grounding check
-  pipeline.py            # RagGuard: orchestrates all three stages
-  types.py               # Chunk, RelevanceResult, SufficiencyResult, GroundingResult, GuardReport
-tests/                    # full suite runs against a scripted FakeDecisionModel, no API needed
-examples/quickstart.py    # runnable end-to-end demo, no API keys required
+  decision_model.py     # DecisionModel interface + Heuristic/OpenAI/Anthropic/Jev implementations
+  relevance.py           # stage 1: per-chunk relevance filter
+  sufficiency.py          # stage 2: pre-generation sufficiency gate
+  grounding.py             # stage 3: post-generation claim-by-claim grounding check
+  pipeline.py               # RagGuard: orchestrates all three stages
+  types.py                   # Chunk, RelevanceResult, SufficiencyResult, GroundingResult, GuardReport
+tests/                        # full suite runs against a scripted FakeDecisionModel, no API needed
+  conftest.py                 # FakeDecisionModel fixture used by every test module
+  test_decision_model.py      # heuristic tests + mocked/live tests for every real backend
+  test_relevance.py / test_sufficiency.py / test_grounding.py / test_pipeline.py
+examples/
+  quickstart.py                # zero-dependency, no API keys required
+  real_pipeline.py              # real vector store (chromadb) + real LLM + optional Jev backend
+  corpus.py                      # ~30-document corpus used by real_pipeline.py
+.github/workflows/ci.yml          # pytest (3.10/3.11/3.12) + ruff + mypy, on push and PR
+pyproject.toml                      # package metadata, optional-dependency extras, ruff/mypy config
 ```
 
-## Testing
+## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest -q          # 33 mocked tests always run; 3 live tests skip without API keys
+ruff check .        # lint
+mypy                 # strict type-check of rag_guard/
 ```
 
-All tests run against a fully-scripted `FakeDecisionModel` (see
-`tests/conftest.py`), so the suite is deterministic and needs no API keys or
-network access.
+All non-live tests run against a fully-scripted `FakeDecisionModel` (see
+`tests/conftest.py`), so the default suite is deterministic and needs no
+API keys or network access. Three opt-in live tests
+(`test_openai_live_*`, `test_anthropic_live_*`, `test_jev_live_*`) make a
+real API call each and are skipped automatically unless the matching
+`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `TYPESAFE_API_KEY` is set --
+they're what actually proves an adapter works against its live API, not
+just that it parses a response correctly. CI never sets these keys, so it
+never burns real API calls; wiring them up as CI secrets is a decision
+left to whoever owns the repo.
+
+## About the SKILL.md file
+
+`SKILL.md` in the repo root is TypeSafe's own reference document for
+building against their Jev API -- it points to the live documentation
+(https://docs.typesafe.ai) for the current API contract, SDK usage, and
+primitive definitions (Noul / Choice / Score), rather than duplicating
+that reference here where it could drift out of date. It was used while
+implementing `JevDecisionModel` in `rag_guard/decision_model.py`: the
+correct package name (`typesafe-sdk`, not `typesafe-sdk-python`), the
+`TypeSafeClient` / `Noul` / `Choice` shapes, and the `TYPESAFE_API_KEY`
+convention all came from reading those live docs rather than being
+guessed. It's kept in the repo as the canonical pointer for anyone
+extending or debugging the Jev backend.
