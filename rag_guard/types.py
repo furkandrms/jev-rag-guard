@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,7 @@ class Chunk:
 
     id: str
     text: str
-    source: Optional[str] = None
+    source: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -31,7 +31,7 @@ class SufficiencyResult:
 
     sufficient: bool
     probability: float
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,8 +68,8 @@ class GuardReport:
     query: str
     relevance: list[RelevanceResult]
     sufficiency: SufficiencyResult
-    answer: Optional[str] = None
-    grounding: Optional[GroundingResult] = None
+    answer: str | None = None
+    grounding: GroundingResult | None = None
     action: str = "unknown"
 
     @property

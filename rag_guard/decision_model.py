@@ -23,9 +23,11 @@ yes/no or closed-set judgment, not a generation.
 from __future__ import annotations
 
 import json
+import math
 import re
 from abc import ABC, abstractmethod
-from typing import Mapping
+from collections.abc import Mapping
+from typing import Any
 
 
 class DecisionModel(ABC):
@@ -137,7 +139,7 @@ class HeuristicDecisionModel(DecisionModel):
         # logistic squash around `midpoint` so scores spread across (0, 1)
         # instead of clustering near the extremes.
         x = self.steepness * (ratio - self.midpoint)
-        return 1.0 / (1.0 + pow(2.718281828, -x))
+        return 1.0 / (1.0 + math.exp(-x))
 
     def noul(self, state: str, question: str) -> float:
         return round(self._overlap_score(state, question), 4)
@@ -151,7 +153,7 @@ class HeuristicDecisionModel(DecisionModel):
         }
         total = sum(scores.values()) or 1.0
         distribution = {k: round(v / total, 4) for k, v in scores.items()}
-        chosen = max(distribution, key=distribution.get)
+        chosen = max(distribution, key=lambda k: distribution[k])
         return chosen, distribution
 
 
@@ -180,7 +182,7 @@ class _StructuredLLMDecisionModel(DecisionModel):
         "State:\n{state}\n\nQuestion: {question}\n\nOptions:\n{options}"
     )
 
-    def _complete_json(self, prompt: str) -> dict:
+    def _complete_json(self, prompt: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def noul(self, state: str, question: str) -> float:
@@ -201,7 +203,7 @@ class _StructuredLLMDecisionModel(DecisionModel):
         distribution = {k: float(raw.get(k, 0.0)) for k in options}
         total = sum(distribution.values()) or 1.0
         distribution = {k: v / total for k, v in distribution.items()}
-        chosen = max(distribution, key=distribution.get)
+        chosen = max(distribution, key=lambda k: distribution[k])
         return chosen, distribution
 
 
@@ -215,8 +217,9 @@ class OpenAIDecisionModel(_StructuredLLMDecisionModel):
     later for the speed/cost win.
     """
 
-    def __init__(self, model: str = "gpt-4o-mini", client: object | None = None) -> None:
+    def __init__(self, model: str = "gpt-4o-mini", client: Any | None = None) -> None:
         self.model = model
+        self._client: Any
         if client is not None:
             self._client = client
         else:
@@ -229,7 +232,7 @@ class OpenAIDecisionModel(_StructuredLLMDecisionModel):
                 ) from exc
             self._client = OpenAI()
 
-    def _complete_json(self, prompt: str) -> dict:
+    def _complete_json(self, prompt: str) -> dict[str, Any]:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -237,7 +240,8 @@ class OpenAIDecisionModel(_StructuredLLMDecisionModel):
             temperature=0,
         )
         content = response.choices[0].message.content
-        return json.loads(content)
+        result: dict[str, Any] = json.loads(content)
+        return result
 
 
 class AnthropicDecisionModel(_StructuredLLMDecisionModel):
@@ -247,8 +251,9 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
     LLM call shaped to look like a typed decision, not a native one.
     """
 
-    def __init__(self, model: str = "claude-haiku-4-5", client: object | None = None) -> None:
+    def __init__(self, model: str = "claude-haiku-4-5", client: Any | None = None) -> None:
         self.model = model
+        self._client: Any
         if client is not None:
             self._client = client
         else:
@@ -261,7 +266,7 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
                 ) from exc
             self._client = anthropic.Anthropic()
 
-    def _complete_json(self, prompt: str) -> dict:
+    def _complete_json(self, prompt: str) -> dict[str, Any]:
         response = self._client.messages.create(
             model=self.model,
             max_tokens=256,
@@ -276,7 +281,8 @@ class AnthropicDecisionModel(_StructuredLLMDecisionModel):
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             raise ValueError(f"No JSON object found in model response: {text!r}")
-        return json.loads(match.group(0))
+        result: dict[str, Any] = json.loads(match.group(0))
+        return result
 
 
 # No JevDecisionModel here: `typesafe-sdk-python` does not exist on PyPI as

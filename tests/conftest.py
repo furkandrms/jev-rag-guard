@@ -9,7 +9,7 @@ sufficiency probability of 0.2, RagGuard must not call generate_fn."
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 import pytest
 
@@ -25,7 +25,7 @@ class FakeDecisionModel(DecisionModel):
         self.noul_rules: list[tuple[str, float]] = []
         self.calls: list[tuple[str, str]] = []
 
-    def when(self, question_substring: str, probability: float) -> "FakeDecisionModel":
+    def when(self, question_substring: str, probability: float) -> FakeDecisionModel:
         self.noul_rules.append((question_substring, probability))
         return self
 

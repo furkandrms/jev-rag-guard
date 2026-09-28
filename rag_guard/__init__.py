@@ -20,16 +20,16 @@ free-form model call, which keeps it fast, cheap, and auditable. The
 decision model itself is pluggable -- see `rag_guard.decision_model`.
 """
 
+from .decision_model import DecisionModel, HeuristicDecisionModel
+from .pipeline import RagGuard
 from .types import (
     Chunk,
-    RelevanceResult,
-    SufficiencyResult,
     GroundingClaim,
     GroundingResult,
     GuardReport,
+    RelevanceResult,
+    SufficiencyResult,
 )
-from .decision_model import DecisionModel, HeuristicDecisionModel
-from .pipeline import RagGuard
 
 __all__ = [
     "Chunk",

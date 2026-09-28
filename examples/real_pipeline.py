@@ -46,11 +46,11 @@ from __future__ import annotations
 
 import os
 
+from corpus import DOCUMENTS
+
 from rag_guard import Chunk, RagGuard
 from rag_guard.decision_model import AnthropicDecisionModel, DecisionModel, OpenAIDecisionModel
 from rag_guard.pipeline import GenerateFn
-
-from corpus import DOCUMENTS
 
 COLLECTION_NAME = "rag_guard_real_pipeline_example"
 
