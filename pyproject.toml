@@ -14,6 +14,7 @@ dependencies = []
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
+examples = ["chromadb>=0.5"]
 dev = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]

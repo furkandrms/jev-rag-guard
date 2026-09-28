@@ -59,6 +59,21 @@ Run `python examples/quickstart.py` for a full working example with no API
 keys required (uses the built-in heuristic decision model and a stub
 retriever/generator).
 
+For a version wired to a real vector store (chromadb) and a real LLM
+(OpenAI or Anthropic), see `examples/real_pipeline.py`:
+
+```bash
+pip install -e ".[examples,openai]"   # or ".[examples,anthropic]"
+export OPENAI_API_KEY=...             # or ANTHROPIC_API_KEY
+python examples/real_pipeline.py
+```
+
+It runs 4 queries end to end against a ~30-document corpus and prints the
+same `GuardReport` trace as `quickstart.py`, so you can compare the
+heuristic demo against a real pipeline side by side. The whole run costs
+well under $0.01 with the default models (`gpt-4o-mini` /
+`claude-haiku-4-5`) -- see the module docstring for the cost breakdown.
+
 `report` is a `GuardReport` with the full trace: `report.relevance` (per-chunk
 probabilities and keep/drop decisions), `report.sufficiency`,
 `report.grounding` (per-claim probabilities), and `report.kept_chunks`.
