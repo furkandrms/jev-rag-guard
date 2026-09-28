@@ -5,6 +5,8 @@ it doesn't generate -- it wraps the seam between the two with three small,
 cheap, typed checks, and gives you a full trace of what it decided and why.
 
 [![CI](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Table of contents
 
@@ -18,6 +20,7 @@ cheap, typed checks, and gives you a full trace of what it decided and why.
 - [Project layout](#project-layout)
 - [Development](#development)
 - [About the SKILL.md file](#about-the-skillmd-file)
+- [License](#license)
 
 ## Why
 
@@ -45,6 +48,8 @@ prose you have to parse.
 
 ## Install
 
+Requires Python 3.10+.
+
 ```bash
 pip install -e .
 # optional, if you want a real decision model instead of the built-in heuristic:
@@ -55,6 +60,19 @@ pip install -e ".[typesafe]"   # native typed-decision model, see "decision mode
 
 The core `rag_guard` package has **zero required dependencies**. Every
 backend beyond the built-in heuristic is an opt-in extra.
+
+If you're using a real backend or `examples/real_pipeline.py`, copy
+[`.env.example`](.env.example) to `.env` and fill in whichever key(s) you
+need:
+
+```bash
+cp .env.example .env
+```
+
+`.env` is gitignored -- it's never committed. rag-guard itself doesn't load
+`.env` files for you (it has no dependencies to do so); `examples/real_pipeline.py`
+reads these as plain environment variables, so either `export` them or use
+a tool like `python-dotenv` / `direnv` to load `.env` into your shell.
 
 ## Quickstart
 
@@ -280,3 +298,7 @@ correct package name (`typesafe-sdk`, not `typesafe-sdk-python`), the
 convention all came from reading those live docs rather than being
 guessed. It's kept in the repo as the canonical pointer for anyone
 extending or debugging the Jev backend.
+
+## License
+
+MIT -- see [`LICENSE`](LICENSE).
