@@ -12,10 +12,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .decision_model import DecisionModel
+from .caveat import check_caveat
+from .clarify import check_ambiguity
 from .grounding import check_grounding
+from .intent import check_intent
 from .relevance import filter_relevant_chunks, rerank_kept_chunks
 from .sufficiency import check_sufficiency
-from .types import Chunk, GuardReport
+from .types import Chunk, GuardReport, SufficiencyResult
 
 GenerateFn = Callable[[str, list[Chunk]], str]
 
@@ -50,6 +53,22 @@ class RagGuard:
         probability (most relevant first) instead of retrieval order.
         `GuardReport.kept_chunks` still reflects retrieval order for audit
         purposes -- this only reorders what the generator actually sees.
+    check_intent_enabled:
+        Set False to skip the pre-retrieval escalate/refuse gate entirely.
+    intent_threshold:
+        Minimum P(escalate|refuse) for the intent gate to actually stop the
+        pipeline instead of falling through to "proceed".
+    check_ambiguity_enabled:
+        Set False to skip the post-relevance clarify gate entirely.
+    ambiguity_threshold:
+        Minimum P(needs clarification) for the pipeline to stop and ask for
+        clarification instead of proceeding to the sufficiency gate.
+    check_caveat_enabled:
+        Set False to skip the post-grounding caveat check entirely -- every
+        passing answer is then reported as plain "answered".
+    caveat_threshold:
+        Minimum P(has caveat) for a grounded answer to be reported as
+        "answered_with_caveat" instead of "answered".
     """
 
     model: DecisionModel
@@ -59,18 +78,51 @@ class RagGuard:
     grounding_min_coverage: float = 0.8
     check_grounding_enabled: bool = True
     rerank_by_relevance: bool = False
+    check_intent_enabled: bool = True
+    intent_threshold: float = 0.5
+    check_ambiguity_enabled: bool = True
+    ambiguity_threshold: float = 0.6
+    check_caveat_enabled: bool = True
+    caveat_threshold: float = 0.5
     insufficient_context_message: str = (
         "I don't have enough information in the retrieved context to answer "
         "this confidently."
     )
+    escalate_message: str = (
+        "This needs a human right away -- I'm not able to help with this "
+        "through document lookup."
+    )
+    refuse_message: str = "I can't help with that request."
 
     def run(self, query: str, chunks: list[Chunk], generate_fn: GenerateFn) -> GuardReport:
         """Run the full guarded pipeline for one query.
 
-        Stops before calling `generate_fn` if the sufficiency gate fails.
-        Otherwise calls `generate_fn(query, kept_chunks)` exactly once and,
-        if grounding checks are enabled, verifies the result.
+        Stops before retrieval entirely if the intent gate escalates or
+        refuses; stops before calling `generate_fn` if the clarify or
+        sufficiency gate fails. Otherwise calls `generate_fn(query,
+        kept_chunks)` exactly once and, if grounding checks are enabled,
+        verifies the result.
         """
+        if self.check_intent_enabled:
+            intent = check_intent(query, self.model, threshold=self.intent_threshold)
+            if intent.action != "proceed":
+                message = (
+                    self.escalate_message if intent.action == "escalate" else self.refuse_message
+                )
+                return GuardReport(
+                    query=query,
+                    relevance=[],
+                    sufficiency=SufficiencyResult(
+                        sufficient=False, probability=0.0, reason=intent.reason
+                    ),
+                    answer=message,
+                    grounding=None,
+                    action=intent.action,
+                    intent=intent,
+                )
+        else:
+            intent = None
+
         relevance = filter_relevant_chunks(
             query, chunks, self.model, threshold=self.relevance_threshold
         )
@@ -79,6 +131,26 @@ class RagGuard:
             if self.rerank_by_relevance
             else [r.chunk for r in relevance if r.kept]
         )
+
+        if self.check_ambiguity_enabled:
+            clarify = check_ambiguity(
+                query, kept_chunks, self.model, threshold=self.ambiguity_threshold
+            )
+            if clarify.needs_clarification:
+                return GuardReport(
+                    query=query,
+                    relevance=relevance,
+                    sufficiency=SufficiencyResult(
+                        sufficient=False, probability=0.0, reason=clarify.reason
+                    ),
+                    answer=None,
+                    grounding=None,
+                    action="clarify",
+                    intent=intent,
+                    clarify=clarify,
+                )
+        else:
+            clarify = None
 
         sufficiency = check_sufficiency(
             query, kept_chunks, self.model, threshold=self.sufficiency_threshold
@@ -92,6 +164,8 @@ class RagGuard:
                 answer=self.insufficient_context_message,
                 grounding=None,
                 action="insufficient_context",
+                intent=intent,
+                clarify=clarify,
             )
 
         answer = generate_fn(query, kept_chunks)
@@ -104,6 +178,8 @@ class RagGuard:
                 answer=answer,
                 grounding=None,
                 action="answered",
+                intent=intent,
+                clarify=clarify,
             )
 
         grounding = check_grounding(
@@ -114,7 +190,25 @@ class RagGuard:
             min_coverage=self.grounding_min_coverage,
         )
 
-        action = "answered" if grounding.grounded else "ungrounded_answer_flagged"
+        if not grounding.grounded:
+            return GuardReport(
+                query=query,
+                relevance=relevance,
+                sufficiency=sufficiency,
+                answer=answer,
+                grounding=grounding,
+                action="ungrounded_answer_flagged",
+                intent=intent,
+                clarify=clarify,
+            )
+
+        caveat = (
+            check_caveat(answer, kept_chunks, self.model, threshold=self.caveat_threshold)
+            if self.check_caveat_enabled
+            else None
+        )
+        action = "answered_with_caveat" if caveat and caveat.has_caveat else "answered"
+
         return GuardReport(
             query=query,
             relevance=relevance,
@@ -122,4 +216,8 @@ class RagGuard:
             answer=answer,
             grounding=grounding,
             action=action,
+            intent=intent,
+            clarify=clarify,
+            caveat=caveat,
         )
+
