@@ -22,6 +22,7 @@ decision model itself is pluggable -- see `rag_guard.decision_model`.
 
 from .decision_model import DecisionModel, HeuristicDecisionModel
 from .pipeline import RagGuard
+from .relevance import rerank_kept_chunks
 from .types import (
     Chunk,
     GroundingClaim,
@@ -41,6 +42,7 @@ __all__ = [
     "DecisionModel",
     "HeuristicDecisionModel",
     "RagGuard",
+    "rerank_kept_chunks",
 ]
 
 __version__ = "0.1.0"

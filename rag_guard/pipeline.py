@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from .decision_model import DecisionModel
 from .grounding import check_grounding
-from .relevance import filter_relevant_chunks
+from .relevance import filter_relevant_chunks, rerank_kept_chunks
 from .sufficiency import check_sufficiency
 from .types import Chunk, GuardReport
 
@@ -45,6 +45,11 @@ class RagGuard:
     check_grounding_enabled:
         Set False to skip stage 3 entirely (e.g. if `generate_fn` already has
         its own citation mechanism you trust).
+    rerank_by_relevance:
+        If True, chunks are handed to `generate_fn` ordered by relevance
+        probability (most relevant first) instead of retrieval order.
+        `GuardReport.kept_chunks` still reflects retrieval order for audit
+        purposes -- this only reorders what the generator actually sees.
     """
 
     model: DecisionModel
@@ -53,6 +58,7 @@ class RagGuard:
     grounding_threshold: float = 0.5
     grounding_min_coverage: float = 0.8
     check_grounding_enabled: bool = True
+    rerank_by_relevance: bool = False
     insufficient_context_message: str = (
         "I don't have enough information in the retrieved context to answer "
         "this confidently."
@@ -68,7 +74,11 @@ class RagGuard:
         relevance = filter_relevant_chunks(
             query, chunks, self.model, threshold=self.relevance_threshold
         )
-        kept_chunks = [r.chunk for r in relevance if r.kept]
+        kept_chunks = (
+            rerank_kept_chunks(relevance)
+            if self.rerank_by_relevance
+            else [r.chunk for r in relevance if r.kept]
+        )
 
         sufficiency = check_sufficiency(
             query, kept_chunks, self.model, threshold=self.sufficiency_threshold

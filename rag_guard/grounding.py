@@ -21,17 +21,42 @@ GROUNDING_QUESTION = (
     "in the context, even if they sound plausible."
 )
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
+
+# Trailing words after which a "." is almost never a sentence boundary --
+# without this, "Dr. Smith confirmed it." or "e.g. the Q3 report." gets cut
+# into two bogus claims, and grounding ends up judging fragments like "Dr."
+# on their own.
+_ABBREVIATIONS = {
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "approx",
+    "fig", "eq", "no", "e.g", "i.e", "u.s", "u.k", "e.u", "a.m", "p.m",
+}
 
 
 def split_claims(answer: str) -> list[str]:
-    """Naive sentence-level split of a generated answer into checkable claims.
+    """Sentence-level split of a generated answer into checkable claims.
 
-    Good enough as a first pass; swap in a proper claim-decomposition step
-    (e.g. an LLM call that extracts atomic claims) if your answers are long
-    or multi-clause and sentence boundaries are too coarse.
+    Slightly abbreviation-aware (see `_ABBREVIATIONS`) so common titles and
+    Latin abbreviations don't get cut mid-sentence; still a heuristic, not a
+    parser -- swap in a proper claim-decomposition step (e.g. an LLM call
+    that extracts atomic claims) if your answers are long or multi-clause
+    and sentence boundaries are too coarse.
     """
-    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(answer.strip()) if s.strip()]
+    text = answer.strip()
+    if not text:
+        return []
+
+    claims: list[str] = []
+    for part in (p.strip() for p in _SENTENCE_SPLIT_RE.split(text)):
+        if not part:
+            continue
+        if claims:
+            last_word = re.split(r"\s+", claims[-1].rstrip(".!?\"'"))[-1].lower()
+            if last_word in _ABBREVIATIONS:
+                claims[-1] = f"{claims[-1]} {part}"
+                continue
+        claims.append(part)
+    return claims
 
 
 def check_grounding(

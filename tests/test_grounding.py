@@ -20,6 +20,19 @@ def test_split_claims_empty_string():
     assert split_claims("") == []
 
 
+def test_split_claims_does_not_split_on_abbreviations():
+    claims = split_claims("Dr. Smith confirmed the results. The study ran for 3 months.")
+    assert claims == [
+        "Dr. Smith confirmed the results.",
+        "The study ran for 3 months.",
+    ]
+
+
+def test_split_claims_does_not_split_on_latin_abbreviations():
+    claims = split_claims("Nimbus supports several languages, e.g. Python and SQL.")
+    assert claims == ["Nimbus supports several languages, e.g. Python and SQL."]
+
+
 def test_fully_grounded_answer_passes():
     model = FakeDecisionModel(default=0.9)
     chunks = [Chunk(id="a", text="Paris is the capital of France.")]

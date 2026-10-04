@@ -38,3 +38,18 @@ def filter_relevant_chunks(
             RelevanceResult(chunk=chunk, probability=probability, kept=probability >= threshold)
         )
     return results
+
+
+def rerank_kept_chunks(results: list[RelevanceResult]) -> list[Chunk]:
+    """Order kept chunks by relevance probability, most relevant first.
+
+    `filter_relevant_chunks` deliberately preserves retrieval order (see
+    module docstring) so the audit trail stays aligned with the original
+    chunk list. Call this separately when you want the chunks actually
+    handed to the generator ordered by relevance instead -- LLMs attend
+    more reliably to the start of a long context, so a strong chunk buried
+    behind several weak ones is a real, avoidable source of hallucination
+    that a pure filter doesn't fix.
+    """
+    kept = [r for r in results if r.kept]
+    return [r.chunk for r in sorted(kept, key=lambda r: r.probability, reverse=True)]
