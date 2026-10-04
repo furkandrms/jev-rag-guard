@@ -27,11 +27,19 @@ class RelevanceResult:
 
 @dataclass(frozen=True)
 class SufficiencyResult:
-    """Outcome of the pre-generation sufficiency gate."""
+    """Outcome of the pre-generation sufficiency gate.
+
+    `partial` is True when the context clearly doesn't clear the full
+    `sufficient` bar but also isn't empty/off-topic -- i.e. a mixed question
+    where some of it is answerable and some isn't. `sufficient` and
+    `partial` are mutually exclusive; both False means the context gave no
+    usable basis to answer anything.
+    """
 
     sufficient: bool
     probability: float
     reason: str | None = None
+    partial: bool = False
 
 
 @dataclass(frozen=True)

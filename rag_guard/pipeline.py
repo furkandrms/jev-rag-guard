@@ -11,16 +11,30 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .decision_model import DecisionModel
 from .caveat import check_caveat
 from .clarify import check_ambiguity
+from .decision_model import DecisionModel
 from .grounding import check_grounding
 from .intent import check_intent
 from .relevance import filter_relevant_chunks, rerank_kept_chunks
 from .sufficiency import check_sufficiency
-from .types import Chunk, GuardReport, SufficiencyResult
+from .types import CaveatResult, Chunk, GuardReport, SufficiencyResult
 
 GenerateFn = Callable[[str, list[Chunk]], str]
+
+# Prepended to the query sent to `generate_fn` when sufficiency comes back
+# partial. `GenerateFn`'s signature is fixed at (query, chunks) -> str --
+# there's no side channel to tell an arbitrary caller-supplied generator
+# "answer partially" -- but every real generate_fn builds its prompt from
+# this same query string (see pipeline_setup.build_generate_fn), so an
+# instruction folded into the query reaches the model the same way the
+# question itself does, without changing the public generation contract.
+PARTIAL_CONTEXT_INSTRUCTION = (
+    "Note: the retrieved context below only partially covers this "
+    "question. Answer only the part(s) it actually supports, and clearly "
+    "state which part of the question you cannot answer from the given "
+    "context. Do not guess or use outside knowledge to fill the gap.\n\n"
+)
 
 
 @dataclass
@@ -37,7 +51,20 @@ class RagGuard:
     sufficiency_threshold:
         Minimum P(sufficient) for the pipeline to proceed to generation at all.
         Below this, RagGuard returns `insufficient_context_message` instead of
-        calling `generate_fn`, saving the generation cost entirely.
+        calling `generate_fn`, saving the generation cost entirely -- unless
+        the partial-sufficiency band below catches it first.
+    partial_sufficiency_threshold:
+        Below `sufficiency_threshold` but at or above this, the context is
+        judged to partially cover the question (a common shape for mixed
+        questions -- part answerable, part not) rather than not at all.
+        `generate_fn` is still called, but with a instruction appended to
+        the query telling it to answer only the supported part and say what
+        it can't -- the resulting answer is reported as
+        "answered_with_caveat" (or "ungrounded_answer_flagged" if even that
+        partial answer doesn't check out), never silently as "answered".
+        Set to None (the default) to disable the partial band entirely --
+        anything below `sufficiency_threshold` is then always
+        "insufficient_context", matching the old behavior exactly.
     grounding_threshold:
         Minimum P(supported) for a single claim to count as grounded.
     grounding_min_coverage:
@@ -74,6 +101,7 @@ class RagGuard:
     model: DecisionModel
     relevance_threshold: float = 0.5
     sufficiency_threshold: float = 0.6
+    partial_sufficiency_threshold: float | None = None
     grounding_threshold: float = 0.5
     grounding_min_coverage: float = 0.8
     check_grounding_enabled: bool = True
@@ -153,10 +181,14 @@ class RagGuard:
             clarify = None
 
         sufficiency = check_sufficiency(
-            query, kept_chunks, self.model, threshold=self.sufficiency_threshold
+            query,
+            kept_chunks,
+            self.model,
+            threshold=self.sufficiency_threshold,
+            partial_threshold=self.partial_sufficiency_threshold,
         )
 
-        if not sufficiency.sufficient:
+        if not sufficiency.sufficient and not sufficiency.partial:
             return GuardReport(
                 query=query,
                 relevance=relevance,
@@ -168,7 +200,18 @@ class RagGuard:
                 clarify=clarify,
             )
 
-        answer = generate_fn(query, kept_chunks)
+        # A synthetic caveat for the partial branch: we already know *why*
+        # this answer needs a caveat (sufficiency said so), so there's no
+        # need to spend another decision call re-discovering it the way
+        # check_caveat() does for an answer that looked fully sufficient
+        # going in.
+        partial_caveat = (
+            CaveatResult(has_caveat=True, probability=1.0, reason=sufficiency.reason)
+            if sufficiency.partial
+            else None
+        )
+        generate_query = f"{PARTIAL_CONTEXT_INSTRUCTION}{query}" if sufficiency.partial else query
+        answer = generate_fn(generate_query, kept_chunks)
 
         if not self.check_grounding_enabled:
             return GuardReport(
@@ -177,9 +220,10 @@ class RagGuard:
                 sufficiency=sufficiency,
                 answer=answer,
                 grounding=None,
-                action="answered",
+                action="answered_with_caveat" if sufficiency.partial else "answered",
                 intent=intent,
                 clarify=clarify,
+                caveat=partial_caveat,
             )
 
         grounding = check_grounding(
@@ -200,6 +244,20 @@ class RagGuard:
                 action="ungrounded_answer_flagged",
                 intent=intent,
                 clarify=clarify,
+                caveat=partial_caveat,
+            )
+
+        if sufficiency.partial:
+            return GuardReport(
+                query=query,
+                relevance=relevance,
+                sufficiency=sufficiency,
+                answer=answer,
+                grounding=grounding,
+                action="answered_with_caveat",
+                intent=intent,
+                clarify=clarify,
+                caveat=partial_caveat,
             )
 
         caveat = (

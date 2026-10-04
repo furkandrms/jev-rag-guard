@@ -205,6 +205,73 @@ def test_caveat_marks_answered_with_caveat():
     assert report.caveat.has_caveat is True
 
 
+def test_partial_sufficiency_proceeds_to_generation_with_caveat():
+    model = _baseline_model(default=0.95)
+    model.when("enough information", 0.1)  # main sufficiency question fails
+    model.when("at least one distinct part", 0.8)  # partial question fires
+    guard = RagGuard(model=model, sufficiency_threshold=0.6, partial_sufficiency_threshold=0.5)
+
+    generate_calls = []
+
+    def generate_fn(query, chunks):
+        generate_calls.append(query)
+        return "Partial answer based on what's available."
+
+    report = guard.run("mixed question", _chunks(2), generate_fn)
+
+    assert report.action == "answered_with_caveat"
+    assert report.sufficiency.partial is True
+    assert report.caveat is not None
+    assert report.caveat.has_caveat is True
+    assert len(generate_calls) == 1
+    assert "only partially covers" in generate_calls[0]  # instruction was folded into the query
+    assert "mixed question" in generate_calls[0]  # original query still present
+
+
+def test_partial_sufficiency_disabled_by_default_stays_insufficient():
+    model = _baseline_model(default=0.9)
+    model.when("enough information", 0.1)  # main sufficiency question fails
+    model.when("at least one distinct part", 0.8)  # would fire if partial_threshold were set
+
+    guard = RagGuard(model=model, sufficiency_threshold=0.6)  # partial_sufficiency_threshold unset
+
+    generate_calls = []
+    report = guard.run("mixed question", _chunks(2), lambda q, c: generate_calls.append(1))
+
+    assert report.action == "insufficient_context"
+    assert generate_calls == []
+
+
+def test_partial_sufficiency_answer_still_flagged_if_ungrounded():
+    model = _baseline_model(default=0.95)
+    model.when("enough information", 0.1)  # main sufficiency question fails
+    model.when("at least one distinct part", 0.8)  # partial question fires
+    model.when("directly supported", 0.05)  # grounding question fails for every claim
+    guard = RagGuard(model=model, sufficiency_threshold=0.6, partial_sufficiency_threshold=0.5)
+
+    report = guard.run("mixed question", _chunks(2), lambda q, c: "This claim is made up.")
+
+    assert report.action == "ungrounded_answer_flagged"
+
+
+def test_partial_sufficiency_with_grounding_disabled():
+    model = _baseline_model(default=0.95)
+    model.when("enough information", 0.1)  # main sufficiency question fails
+    model.when("at least one distinct part", 0.8)  # partial question fires
+    guard = RagGuard(
+        model=model,
+        sufficiency_threshold=0.6,
+        partial_sufficiency_threshold=0.5,
+        check_grounding_enabled=False,
+    )
+
+    report = guard.run("mixed question", _chunks(2), lambda q, c: "Partial answer.")
+
+    assert report.action == "answered_with_caveat"
+    assert report.grounding is None
+    assert report.caveat is not None
+
+
 def test_caveat_check_can_be_disabled():
     model = _baseline_model(default=0.95)
     model.when("mislead the user", 0.8)  # would fire if the check ran

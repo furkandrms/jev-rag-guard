@@ -10,12 +10,22 @@ the threshold.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from .decision_model import DecisionModel
 from .types import Chunk, RelevanceResult
 
 RELEVANCE_QUESTION = (
     "Does this passage contain information that helps answer the question?"
 )
+
+# Each chunk's judgment is an independent, I/O-bound `model.noul()` call
+# (an LLM API round trip for every real backend) -- run sequentially, a
+# dozen-chunk retrieval spends a dozen round trips back to back before
+# sufficiency even starts. Capped rather than unbounded so a large retrieval
+# (TOP_K raised well past this) doesn't burst past a provider's concurrent
+# rate limit.
+_MAX_WORKERS = 8
 
 
 def filter_relevant_chunks(
@@ -28,16 +38,21 @@ def filter_relevant_chunks(
 
     Returns one `RelevanceResult` per input chunk, in the same order, so
     callers can inspect what was dropped and why -- this is a filter, not a
-    reranker: order is preserved, nothing is reshuffled by score.
+    reranker: order is preserved, nothing is reshuffled by score. Chunks are
+    judged concurrently (see `_MAX_WORKERS`); `ThreadPoolExecutor.map`
+    returns results in input order regardless of which worker finishes
+    first, so the parallelism is invisible to callers.
     """
-    results: list[RelevanceResult] = []
-    for chunk in chunks:
+    if not chunks:
+        return []
+
+    def judge(chunk: Chunk) -> RelevanceResult:
         state = f"Question: {query}\n\nPassage:\n{chunk.text}"
         probability = model.noul(state, RELEVANCE_QUESTION)
-        results.append(
-            RelevanceResult(chunk=chunk, probability=probability, kept=probability >= threshold)
-        )
-    return results
+        return RelevanceResult(chunk=chunk, probability=probability, kept=probability >= threshold)
+
+    with ThreadPoolExecutor(max_workers=min(len(chunks), _MAX_WORKERS)) as pool:
+        return list(pool.map(judge, chunks))
 
 
 def rerank_kept_chunks(results: list[RelevanceResult]) -> list[Chunk]:
