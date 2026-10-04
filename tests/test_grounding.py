@@ -33,6 +33,45 @@ def test_split_claims_does_not_split_on_latin_abbreviations():
     assert claims == ["Nimbus supports several languages, e.g. Python and SQL."]
 
 
+def test_split_claims_keeps_numbered_list_items_intact():
+    answer = (
+        "The datasets used are as follows:\n\n"
+        "1. NSL-KDD, used for evaluation.\n"
+        "2. ToN-IoT, used for testing.\n"
+        "3. A third dataset.\n\n"
+        "Let me know if you need more detail."
+    )
+    claims = split_claims(answer)
+    # No claim is a bare list marker like "1." or "2." on its own -- each
+    # number stays attached to its item's actual content.
+    assert all(c not in {"1.", "2.", "3."} for c in claims)
+    assert any("1. NSL-KDD" in c for c in claims)
+    assert any("2. ToN-IoT" in c for c in claims)
+    assert any("3. A third dataset" in c for c in claims)
+
+
+def test_split_claims_handles_parenthesized_list_markers():
+    answer = "Two options exist:\n\n1) Use the default. 2) Override it manually."
+    claims = split_claims(answer)
+    assert all(c not in {"1)", "2)"} for c in claims)
+    assert any("1) Use the default" in c for c in claims)
+    assert any("2) Override it manually" in c for c in claims)
+
+
+def test_numbered_list_answer_is_fully_gradable():
+    # The real-world bug this guards against: a fully-correct, itemized
+    # answer was marked "not grounded" because bare list-number fragments
+    # ("1.", "2.", ...) diluted an otherwise-perfect coverage score.
+    model = FakeDecisionModel(default=0.95)
+    chunks = [Chunk(id="a", text="NSL-KDD and ToN-IoT are both used in this survey.")]
+    answer = "Datasets used:\n\n1. NSL-KDD.\n2. ToN-IoT."
+
+    result = check_grounding(answer, chunks, model, threshold=0.5, min_coverage=0.8)
+
+    assert result.coverage == 1.0
+    assert result.grounded is True
+
+
 def test_fully_grounded_answer_passes():
     model = FakeDecisionModel(default=0.9)
     chunks = [Chunk(id="a", text="Paris is the capital of France.")]

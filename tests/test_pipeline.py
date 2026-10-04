@@ -57,7 +57,7 @@ def test_full_success_path():
 
 def test_ungrounded_answer_is_flagged_not_hidden():
     model = _baseline_model(default=0.95)
-    model.when("directly supported", 0.05)  # grounding question fails for every claim
+    model.when("supported by the context", 0.05)  # grounding question fails for every claim
     guard = RagGuard(model=model)
 
     def generate_fn(query, chunks):
@@ -246,7 +246,7 @@ def test_partial_sufficiency_answer_still_flagged_if_ungrounded():
     model = _baseline_model(default=0.95)
     model.when("enough information", 0.1)  # main sufficiency question fails
     model.when("at least one distinct part", 0.8)  # partial question fires
-    model.when("directly supported", 0.05)  # grounding question fails for every claim
+    model.when("supported by the context", 0.05)  # grounding question fails for every claim
     guard = RagGuard(model=model, sufficiency_threshold=0.6, partial_sufficiency_threshold=0.5)
 
     report = guard.run("mixed question", _chunks(2), lambda q, c: "This claim is made up.")

@@ -16,12 +16,29 @@ from .decision_model import DecisionModel
 from .types import Chunk, GroundingClaim, GroundingResult
 
 GROUNDING_QUESTION = (
-    "Is this claim directly supported by the context above? Answer no if "
-    "the claim adds specifics, numbers, or conclusions that are not present "
-    "in the context, even if they sound plausible."
+    "Is this claim supported by the context above? The claim may combine or "
+    "paraphrase facts drawn from multiple separate passages in the context "
+    "-- that is still supported, as long as every specific fact, number, or "
+    "conclusion in the claim can be traced to something actually stated "
+    "somewhere in the context. Answer no only if the claim adds a specific, "
+    "number, or conclusion that is not present anywhere in the context, "
+    "even if it sounds plausible -- not merely because no single passage "
+    "states the whole claim on its own."
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
+
+# A numbered-list marker ("1.", "2)", "(3).") at the start of a line, the
+# kind a generated answer uses for a multi-item list. Matched so it can be
+# shielded from the sentence splitter below -- without this, the splitter
+# (which breaks right after ". " before a capital/digit) fires on the
+# marker itself: "...as follows:\n\n1. NSL-KDD was used" becomes two
+# claims, "...as follows:\n\n1." and "NSL-KDD was used", and that first
+# claim is a bare list number with no checkable content in it, which the
+# decision model correctly judges unsupported -- dragging an otherwise
+# fully-grounded, itemized answer's coverage below threshold for a reason
+# that has nothing to do with whether the answer is actually accurate.
+_LIST_MARKER_RE = re.compile(r"(^|\n)([ \t]*\(?\d{1,3}[.)])(?=[ \t])")
 
 # Trailing words after which a "." is almost never a sentence boundary --
 # without this, "Dr. Smith confirmed it." or "e.g. the Q3 report." gets cut
@@ -46,8 +63,13 @@ def split_claims(answer: str) -> list[str]:
     if not text:
         return []
 
+    # Shield list markers from the splitter: insert a NUL right after the
+    # marker so the splitter's "whitespace then capital/digit" lookahead
+    # no longer matches there, then strip the NUL back out below.
+    protected = _LIST_MARKER_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}\x00", text)
+
     claims: list[str] = []
-    for part in (p.strip() for p in _SENTENCE_SPLIT_RE.split(text)):
+    for part in (p.strip().replace("\x00", "") for p in _SENTENCE_SPLIT_RE.split(protected)):
         if not part:
             continue
         if claims:
