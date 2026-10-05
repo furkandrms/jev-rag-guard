@@ -1,0 +1,90 @@
+name: Publish to PyPI
+
+# Two ways to trigger a publish:
+#   1. Publish a GitHub Release (tag vX.Y.Z) -> publishes to the real PyPI.
+#   2. Run this workflow manually (Actions tab -> "Run workflow") and pick
+#      "testpypi" -> publishes to TestPyPI instead, for a dry run before a
+#      real release. Always do this at least once before the first real
+#      release, and verify with:
+#        pip install -i https://test.pypi.org/simple/ rag-guard
+#
+# Uses PyPI Trusted Publishing (OIDC) -- no API token is stored as a
+# repo secret. This requires one manual, one-time setup step on PyPI's
+# side first (see RELEASING.md): register this repo + workflow file +
+# environment name as a "trusted publisher" for the project, once on
+# pypi.org and once on test.pypi.org.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tooling
+        run: pip install build
+      - name: Build sdist and wheel
+        run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/rag-guard
+    permissions:
+      id-token: write  # required for Trusted Publishing -- no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/rag-guard
+    permissions:
+      id-token: write  # required for Trusted Publishing -- no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

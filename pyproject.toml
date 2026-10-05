@@ -8,15 +8,33 @@ version = "0.1.0"
 description = "A typed-decision accuracy layer for RAG pipelines: relevance filtering, a pre-generation sufficiency gate, and post-generation grounding checks."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+authors = [{ name = "Furkan Durmus" }]
+keywords = ["rag", "llm", "hallucination", "retrieval-augmented-generation", "grounding"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/furkandrms/jev-rag-guard"
+Repository = "https://github.com/furkandrms/jev-rag-guard"
+Issues = "https://github.com/furkandrms/jev-rag-guard/issues"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
 typesafe = ["typesafe-sdk>=0.7"]
 examples = ["chromadb>=0.5"]
-dev = ["pytest>=7.0", "ruff>=0.6", "mypy>=1.10", "typesafe-sdk>=0.7"]
+dev = ["pytest>=7.0", "ruff>=0.6", "mypy>=1.10", "typesafe-sdk>=0.7", "build>=1.0", "twine>=5.0"]
 
 [tool.setuptools.packages.find]
 include = ["rag_guard*"]
