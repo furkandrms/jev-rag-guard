@@ -1,7 +1,7 @@
 # rag-guard
 
 A typed-decision accuracy layer for RAG pipelines. It doesn't retrieve and
-it doesn't generate -- it wraps the seam between the two with three small,
+it doesn't generate -- it wraps the seam between the two with six small,
 cheap, typed checks, and gives you a full trace of what it decided and why.
 
 [![CI](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/furkandrms/jev-rag-guard/actions/workflows/ci.yml)
@@ -31,13 +31,16 @@ by what we retrieved." Most RAG hallucination doesn't come from the
 generator lying -- it comes from being handed a context that doesn't
 actually contain the answer, and doing its best anyway.
 
-rag-guard adds three checkpoints around your existing pipeline:
+rag-guard adds six checkpoints around your existing pipeline:
 
 | Stage | When | Question | Effect |
 |---|---|---|---|
+| **Intent** | before retrieval | "Does this query need to be escalated to a human, or refused outright?" | stops before retrieval even runs on safety/legal/privacy-sensitive queries |
 | **Relevance** | after retrieval | "Does this passage help answer the query?" | drops noise before it reaches the next stage |
-| **Sufficiency** | before generation | "Is the kept context enough to answer confidently and completely?" | skips generation entirely on a "no" -- returns an honest "I don't know" instead |
+| **Clarify** | after relevance | "Is the question missing information the context answers differently depending on?" | stops and asks for clarification instead of silently guessing which branch applies |
+| **Sufficiency** | before generation | "Is the kept context enough to answer confidently and completely?" | skips generation entirely on a "no" -- returns an honest "I don't know" instead (or, on a partial match, generates with an instruction to only answer what's supported) |
 | **Grounding** | after generation | "Is each claim in the answer actually supported by the context?" | flags (doesn't hide) answers that drift beyond what was retrieved |
+| **Caveat** | after grounding | "Does the answer depend on a condition or exception that must be surfaced?" | flags technically-correct answers that could still mislead on their own |
 
 Each check is a single bounded yes/no (or closed-set) judgment with a
 calibrated probability attached -- not a free-form model call. That's the
@@ -88,7 +91,8 @@ def my_generate(query: str, chunks: list[Chunk]) -> str:
 chunks = my_vector_store.search(query, k=5)   # your existing retrieval
 report = guard.run(query, chunks, my_generate)
 
-print(report.action)   # "insufficient_context" | "ungrounded_answer_flagged" | "answered"
+print(report.action)   # "refuse" | "escalate" | "clarify" | "insufficient_context"
+                        # | "ungrounded_answer_flagged" | "answered_with_caveat" | "answered"
 print(report.answer)
 ```
 
@@ -114,21 +118,30 @@ run costs well under $0.01 with the default models (`gpt-4o-mini` /
 `claude-haiku-4-5`) -- see the module docstring for the full cost
 breakdown.
 
-`report` is a `GuardReport` with the full trace: `report.relevance` (per-chunk
-probabilities and keep/drop decisions), `report.sufficiency`,
-`report.grounding` (per-claim probabilities), and `report.kept_chunks`.
-Nothing is hidden from you -- rag-guard flags problems, it doesn't silently
-swallow them. What to do with an `ungrounded_answer_flagged` result (show it
-with a warning, retry generation, escalate to a stronger model, log it for
+`report` is a `GuardReport` with the full trace: `report.intent`,
+`report.relevance` (per-chunk probabilities and keep/drop decisions),
+`report.clarify`, `report.sufficiency`, `report.grounding` (per-claim
+probabilities), `report.caveat`, and `report.kept_chunks`. Nothing is
+hidden from you -- rag-guard flags problems, it doesn't silently swallow
+them. What to do with an `ungrounded_answer_flagged` result (show it with a
+warning, retry generation, escalate to a stronger model, log it for
 review) is a decision left to your application.
 
 ## How it works
 
-`RagGuard.run(query, chunks, generate_fn)` walks through the three stages
-in order, short-circuiting as soon as a stage says there's no point going
+`RagGuard.run(query, chunks, generate_fn)` walks through the six stages in
+order, short-circuiting as soon as a stage says there's no point going
 further:
 
 ```
+query
+      │
+      ▼
+┌─────────────┐   escalate/refuse? (checks the raw query, before retrieval)
+│   Intent    │──────────────────────────► return escalate_message/refuse_message
+└─────────────┘   (retrieval is never run)
+      │ proceed
+      ▼
 retrieved chunks
       │
       ▼
@@ -137,10 +150,16 @@ retrieved chunks
 └─────────────┘
       │ kept chunks
       ▼
+┌─────────────┐   does the answer depend on missing info the context
+│   Clarify   │   answers differently depending on?
+└─────────────┘──────────────────────────► return action="clarify" + trace
+      │ unambiguous
+      ▼
 ┌─────────────┐   below sufficiency_threshold?
 │ Sufficiency │──────────────────────────► return "I don't know" + trace
-└─────────────┘   (generate_fn is never called -- no wasted generation cost)
-      │ sufficient
+└─────────────┘   (generate_fn is never called -- no wasted generation cost;
+      │ sufficient    a "partial" match still generates, with an instruction
+      │               to only answer the supported part)
       ▼
 ┌─────────────┐
 │ generate_fn │   your existing LLM call -- called exactly once
@@ -150,16 +169,25 @@ retrieved chunks
 ┌─────────────┐   split into claims, check each against kept chunks
 │  Grounding  │   below grounding_min_coverage? action = "ungrounded_answer_flagged"
 └─────────────┘   (answer is still returned -- rag-guard flags, never hides)
+      │ grounded
+      ▼
+┌─────────────┐   does the answer depend on a condition/exception that
+│   Caveat    │   isn't reflected in it? action = "answered_with_caveat"
+└─────────────┘
       │
       ▼
-  GuardReport(action, answer, relevance, sufficiency, grounding)
+  GuardReport(action, answer, intent, relevance, clarify, sufficiency, grounding, caveat)
 ```
 
 Every stage calls `model.noul(state, question)` (or `.choice(...)`) on
 whatever `DecisionModel` you passed to `RagGuard(model=...)` -- see the next
-section. `relevance.py`, `sufficiency.py`, and `grounding.py` never call an
-LLM API directly; they only ever go through that one interface, which is
-what makes backends swappable without touching the pipeline logic.
+section. `intent.py`, `relevance.py`, `clarify.py`, `sufficiency.py`,
+`grounding.py`, and `caveat.py` never call an LLM API directly; they only
+ever go through that one interface, which is what makes backends
+swappable without touching the pipeline logic. Each of the six gates can
+be disabled independently (`check_intent_enabled`, `check_ambiguity_enabled`,
+`check_caveat_enabled`, `check_grounding_enabled`) -- relevance and
+sufficiency are always on.
 
 ## The decision model is pluggable
 
@@ -212,9 +240,17 @@ guard = RagGuard(
     model=my_model,
     relevance_threshold=0.5,       # per-chunk keep/drop cutoff
     sufficiency_threshold=0.6,     # minimum P(sufficient) to proceed to generation
+    partial_sufficiency_threshold=None,  # set below sufficiency_threshold to enable the
+                                          # "answer only the supported part" partial band
     grounding_threshold=0.5,       # minimum P(supported) for one claim
     grounding_min_coverage=0.8,    # fraction of claims that must be grounded
     check_grounding_enabled=True,  # set False to skip stage 3 entirely
+    check_intent_enabled=True,     # set False to skip the pre-retrieval escalate/refuse gate
+    intent_threshold=0.5,          # minimum P(escalate|refuse) to actually stop the pipeline
+    check_ambiguity_enabled=True,  # set False to skip the post-relevance clarify gate
+    ambiguity_threshold=0.6,       # minimum P(needs clarification) to stop and ask
+    check_caveat_enabled=True,     # set False to skip the post-grounding caveat check
+    caveat_threshold=0.5,          # minimum P(has caveat) to report "answered_with_caveat"
 )
 ```
 
@@ -248,11 +284,14 @@ that applies to any typed-decision system applies here too.
 ```
 rag_guard/
   decision_model.py     # DecisionModel interface + Heuristic/OpenAI/Anthropic/Jev implementations
-  relevance.py           # stage 1: per-chunk relevance filter
-  sufficiency.py          # stage 2: pre-generation sufficiency gate
-  grounding.py             # stage 3: post-generation claim-by-claim grounding check
-  pipeline.py               # RagGuard: orchestrates all three stages
-  types.py                   # Chunk, RelevanceResult, SufficiencyResult, GroundingResult, GuardReport
+  intent.py              # stage 0: pre-retrieval escalate/refuse gate
+  relevance.py            # stage 1: per-chunk relevance filter
+  clarify.py                # stage 1.5: post-relevance ambiguity check
+  sufficiency.py              # stage 2: pre-generation sufficiency gate
+  grounding.py                  # stage 3: post-generation claim-by-claim grounding check
+  caveat.py                       # stage 3.5: post-grounding caveat check
+  pipeline.py                       # RagGuard: orchestrates all six stages
+  types.py                           # Chunk, *Result dataclasses, GuardReport
 tests/                        # full suite runs against a scripted FakeDecisionModel, no API needed
   conftest.py                 # FakeDecisionModel fixture used by every test module
   test_decision_model.py      # heuristic tests + mocked/live tests for every real backend
@@ -262,6 +301,7 @@ examples/
   real_pipeline.py              # real vector store (chromadb) + real LLM + optional Jev backend
   corpus.py                      # ~30-document corpus used by real_pipeline.py
 .github/workflows/ci.yml          # pytest (3.10/3.11/3.12) + ruff + mypy, on push and PR
+.github/workflows/publish.yml       # PyPI trusted-publishing release workflow (see RELEASING.md)
 pyproject.toml                      # package metadata, optional-dependency extras, ruff/mypy config
 ```
 
